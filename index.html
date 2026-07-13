@@ -1,0 +1,1089 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+
+<!-- ── PWA: 標準 ── -->
+<link rel="manifest" id="manifest-link" href="./manifest.webmanifest">
+<meta name="theme-color" id="meta-theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+
+<!-- ── PWA: iOS 固有 ── -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="タイマー">
+<!-- ↓ 静的フォールバック。JS が起動すると「分数入りアイコン」に置き換わる -->
+<link rel="apple-touch-icon" sizes="180x180" href="./icon-180.png">
+<link rel="icon" type="image/png" href="./icon-192.png">
+
+<title>即カウントタイマー</title>
+<style>
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:root {
+  --bg: #000000;
+  --fg: #ffffff;
+  --gear: rgba(255,255,255,0.55);
+  --btn-border: rgba(255,255,255,0.25);
+  --btn-fg: rgba(255,255,255,0.65);
+  --btn-disabled-fg: rgba(255,255,255,0.2);
+  --btn-disabled-border: rgba(255,255,255,0.1);
+  --sheet-bg: #1c1c1e;
+  --section-bg: #2c2c2e;
+  --section-header: #8e8e93;
+  --separator: rgba(255,255,255,0.1);
+  --toggle-off: #39393d;
+  --toggle-on: #30d158;
+  --picker-fade: linear-gradient(to bottom,
+    #1c1c1e 0%, rgba(28,28,30,0) 28%,
+    rgba(28,28,30,0) 72%, #1c1c1e 100%);
+  --picker-line: rgba(255,255,255,0.15);
+  --lang-btn-active: #3a3a3c;
+}
+
+[data-theme="light"] {
+  --bg: #ffffff;
+  --fg: #000000;
+  --gear: rgba(0,0,0,0.55);
+  --btn-border: rgba(0,0,0,0.25);
+  --btn-fg: rgba(0,0,0,0.65);
+  --btn-disabled-fg: rgba(0,0,0,0.2);
+  --btn-disabled-border: rgba(0,0,0,0.1);
+  --sheet-bg: #f2f2f7;
+  --section-bg: #ffffff;
+  --section-header: #6c6c70;
+  --separator: rgba(0,0,0,0.12);
+  --toggle-off: #e5e5ea;
+  --toggle-on: #34c759;
+  --picker-fade: linear-gradient(to bottom,
+    #f2f2f7 0%, rgba(242,242,247,0) 28%,
+    rgba(242,242,247,0) 72%, #f2f2f7 100%);
+  --picker-line: rgba(0,0,0,0.12);
+  --lang-btn-active: #ffffff;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  transition: background 0.3s, color 0.3s;
+}
+
+/* ── MAIN SCREEN ── */
+
+#app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+#gear-btn {
+  position: absolute;
+  top: calc(8px + env(safe-area-inset-top));
+  left: calc(8px + env(safe-area-inset-left));
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 14px;
+  color: var(--gear);
+  touch-action: manipulation;
+  transition: opacity 0.15s;
+}
+#gear-btn:active { opacity: 0.5; }
+#gear-btn svg { display: block; width: 22px; height: 22px; fill: currentColor; }
+
+#main-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 52px;
+}
+
+#timer-display {
+  font-family: ui-monospace, 'SF Mono', Menlo, Monaco, Consolas, 'Courier New', monospace;
+  font-size: clamp(64px, 22vw, 100px);
+  font-weight: 100;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+  user-select: none;
+  transition: color 0.3s;
+}
+
+#timer-display.blink-hidden { opacity: 0; }
+
+#controls {
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+}
+
+.ctrl-btn {
+  background: none;
+  border: 1px solid var(--btn-border);
+  border-radius: 10px;
+  color: var(--btn-fg);
+  font-family: inherit;
+  font-size: 15px;
+  width: 130px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: opacity 0.15s;
+}
+.ctrl-btn:active { opacity: 0.55; }
+.ctrl-btn:disabled {
+  color: var(--btn-disabled-fg);
+  border-color: var(--btn-disabled-border);
+  cursor: default;
+  opacity: 1;
+}
+.ctrl-btn svg { width: 13px; height: 13px; fill: currentColor; flex-shrink: 0; }
+
+/* landscape */
+@media (orientation: landscape) {
+  #timer-display { font-size: clamp(52px, 14vh, 80px); }
+  #main-content { flex-direction: row; gap: 44px; }
+  #controls { flex-direction: column; gap: 12px; }
+  #gear-btn { top: calc(6px + env(safe-area-inset-top)); left: calc(6px + env(safe-area-inset-left)); }
+}
+
+/* ── BACKDROP ── */
+
+#backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s;
+  z-index: 100;
+}
+#backdrop.visible { opacity: 1; pointer-events: all; }
+
+/* ── SETTINGS SHEET ── */
+
+#sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--sheet-bg);
+  border-radius: 13px 13px 0 0;
+  max-height: 92dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  transform: translateY(100%);
+  transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+              background 0.3s;
+  z-index: 101;
+}
+#sheet.open { transform: translateY(0); }
+
+#sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: rgba(128,128,128,0.35);
+  border-radius: 2px;
+  margin: 8px auto 0;
+}
+
+#sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 8px 16px 6px;
+  position: relative;
+  min-height: 44px;
+}
+
+#sheet-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--fg);
+  pointer-events: none;
+}
+
+#done-btn {
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 600;
+  color: #007aff;
+  cursor: pointer;
+  padding: 4px 0;
+  touch-action: manipulation;
+  transition: opacity 0.15s;
+}
+#done-btn:active { opacity: 0.55; }
+
+#sheet-content { padding: 8px 16px calc(48px + env(safe-area-inset-bottom)); }
+
+/* ── FORM SECTIONS ── */
+
+.section { margin-bottom: 28px; }
+
+.section-header {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--section-header);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+  padding: 0 4px;
+}
+
+.section-body {
+  background: var(--section-bg);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: background 0.3s;
+}
+
+.section-footer {
+  font-size: 12px;
+  color: var(--section-header);
+  text-align: center;
+  padding: 8px 4px 0;
+}
+
+/* 補足説明用(左寄せ・複数行) */
+.section-footer.note {
+  text-align: left;
+  line-height: 1.5;
+  padding: 8px 6px 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  min-height: 44px;
+  position: relative;
+}
+
+.row + .row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  height: 0.5px;
+  background: var(--separator);
+}
+
+.row-label {
+  font-size: 17px;
+  color: var(--fg);
+}
+
+/* ── iOS TOGGLE ── */
+
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 51px;
+  height: 31px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  background: var(--toggle-off);
+  border-radius: 15.5px;
+  transition: background 0.22s;
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 27px;
+  height: 27px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3), 0 0 0 0.5px rgba(0,0,0,0.06);
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+  pointer-events: none;
+}
+
+.toggle input:checked + .toggle-track { background: var(--toggle-on); }
+.toggle input:checked + .toggle-track .toggle-knob { transform: translateX(20px); }
+
+/* ── DRUM-ROLL PICKER ── */
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  height: 176px;
+}
+
+.picker-wrap {
+  flex: 1;
+  position: relative;
+  height: 176px;
+  overflow: hidden;
+}
+
+.picker-wrap::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+  border-top: 0.5px solid var(--picker-line);
+  border-bottom: 0.5px solid var(--picker-line);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.picker-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--picker-fade);
+  pointer-events: none;
+  z-index: 3;
+  transition: background 0.3s;
+}
+
+.picker-scroll {
+  height: 100%;
+  overflow-y: scroll;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.picker-scroll::-webkit-scrollbar { display: none; }
+
+.picker-pad { height: 66px; }
+
+.picker-item {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  scroll-snap-align: center;
+  font-size: 20px;
+  color: var(--fg);
+  user-select: none;
+}
+
+.picker-unit {
+  font-size: 15px;
+  color: var(--fg);
+  padding: 0 8px;
+  white-space: nowrap;
+}
+
+/* ── LANGUAGE SEGMENT ── */
+
+.seg-ctrl {
+  display: flex;
+  background: rgba(118,118,128,0.12);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.seg-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+  touch-action: manipulation;
+}
+
+.seg-btn.active {
+  background: var(--lang-btn-active);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.22);
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <button id="gear-btn" onclick="openSettings()" aria-label="Settings">
+    <svg viewBox="0 0 24 24">
+      <path d="M19.43 12.98c.04-.32.07-.64.07-.98s-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65C14.46 2.18 14.25 2 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zM12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z"/>
+    </svg>
+  </button>
+
+  <div id="main-content">
+    <div id="timer-display">15:03</div>
+    <div id="controls">
+      <button class="ctrl-btn" id="pause-btn" onclick="togglePause()">
+        <svg id="icon-pause" viewBox="0 0 24 24"><path d="M14 19V5h4v14zm-8 0V5h4v14z"/></svg>
+        <svg id="icon-play" viewBox="0 0 24 24" style="display:none"><path d="M8 5v14l11-7z"/></svg>
+        <span id="pause-label"></span>
+      </button>
+      <button class="ctrl-btn" id="reset-btn" onclick="resetTimer()">
+        <span id="reset-label"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="backdrop" onclick="closeSettings()"></div>
+
+<div id="sheet">
+  <div id="sheet-handle"></div>
+  <div id="sheet-header">
+    <span id="sheet-title"></span>
+    <button id="done-btn" onclick="doneSettings()"></button>
+  </div>
+  <div id="sheet-content">
+
+    <div class="section">
+      <div class="section-header" id="hdr-alerts"></div>
+      <div class="section-body">
+        <div class="row">
+          <span class="row-label" id="lbl-sound"></span>
+          <label class="toggle">
+            <input type="checkbox" id="tog-sound" onchange="saveSetting('soundEnabled', this.checked)">
+            <div class="toggle-track"><div class="toggle-knob"></div></div>
+          </label>
+        </div>
+        <div class="row">
+          <span class="row-label" id="lbl-vibration"></span>
+          <label class="toggle">
+            <input type="checkbox" id="tog-vibration" onchange="saveSetting('vibrationEnabled', this.checked)">
+            <div class="toggle-track"><div class="toggle-knob"></div></div>
+          </label>
+        </div>
+        <div class="row">
+          <span class="row-label" id="lbl-notifications"></span>
+          <label class="toggle">
+            <input type="checkbox" id="tog-notifications" onchange="onNotifToggle(this.checked)">
+            <div class="toggle-track"><div class="toggle-knob"></div></div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header" id="hdr-duration"></div>
+      <div class="section-body">
+        <div class="picker-row">
+          <div class="picker-wrap"><div class="picker-scroll" id="pick-min"></div></div>
+          <span class="picker-unit" id="unit-min"></span>
+          <div class="picker-wrap"><div class="picker-scroll" id="pick-sec"></div></div>
+          <span class="picker-unit" id="unit-sec"></span>
+        </div>
+      </div>
+      <div class="section-footer note" id="ftr-duration"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-header" id="hdr-appearance"></div>
+      <div class="section-body">
+        <div class="row">
+          <span class="row-label" id="lbl-lightmode"></span>
+          <label class="toggle">
+            <input type="checkbox" id="tog-light" onchange="onThemeChange(this.checked)">
+            <div class="toggle-track"><div class="toggle-knob"></div></div>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-header" id="hdr-language"></div>
+      <div class="section-body">
+        <div class="row">
+          <span class="row-label" id="lbl-language"></span>
+          <div class="seg-ctrl">
+            <button class="seg-btn" id="seg-ja" onclick="setLang('ja')">日本語</button>
+            <button class="seg-btn" id="seg-en" onclick="setLang('en')">English</button>
+          </div>
+        </div>
+      </div>
+      <div class="section-footer">BGM by OtoLogic (CC BY 4.0)</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────
+const cfg = {
+  totalSeconds: 903,
+  soundEnabled: false,
+  vibrationEnabled: false,
+  notificationEnabled: false,
+  lightMode: false,
+  language: 'ja'
+};
+
+let remaining = 903;
+let isFinished = false;
+let isPaused   = false;
+let endTime    = null;
+let mainInterv = null;
+let blinkInterv= null;
+let blinkOn    = true;
+let wakeLock   = null;
+let alarmLoop  = false;
+let alarmTid   = null;
+let notifTid   = null;
+let audioCtx   = null;
+
+// ─── I18N ────────────────────────────────────────────────
+const strings = {
+  ja: {
+    title:      '即カウントタイマー',
+    short:      'タイマー',
+    settings:   '設定',
+    done:       '完了',
+    alerts:     'アラート',
+    sound:      'サウンド',
+    vibration:  '振動',
+    notif:      '通知',
+    duration:   'タイマー時間',
+    durationNote: 'ホーム画面アイコンの数字は、アイコンを追加した時点の分数で固定されます。分数を変更したあとにアイコンの数字も更新したい場合は、ホーム画面にアイコンを追加し直してください。',
+    min:        '分',
+    sec:        '秒',
+    appearance: '外観',
+    lightMode:  'ライトモード',
+    language:   '言語',
+    pause:      '一時停止',
+    resume:     '再開',
+    reset:      'リセット',
+    nTitle:     'タイマー終了',
+    nBody:      '設定した時間が経過しました。'
+  },
+  en: {
+    title:      'Instant Timer',
+    short:      'Timer',
+    settings:   'Settings',
+    done:       'Done',
+    alerts:     'Alerts',
+    sound:      'Sound',
+    vibration:  'Vibration',
+    notif:      'Notifications',
+    duration:   'Timer Duration',
+    durationNote: 'The number on the Home Screen icon is fixed at the moment the icon is added. After changing the duration, re-add the app to your Home Screen to update the icon.',
+    min:        'min.',
+    sec:        'sec.',
+    appearance: 'Appearance',
+    lightMode:  'Light Mode',
+    language:   'Language',
+    pause:      'Pause',
+    resume:     'Resume',
+    reset:      'Reset',
+    nTitle:     'Timer Finished',
+    nBody:      'Your timer has finished.'
+  }
+};
+
+const t = k => strings[cfg.language][k] || k;
+
+function applyLang() {
+  document.documentElement.lang = cfg.language;
+  document.title = t('title');
+  $('sheet-title').textContent  = t('settings');
+  $('done-btn').textContent     = t('done');
+  $('hdr-alerts').textContent   = t('alerts');
+  $('lbl-sound').textContent    = t('sound');
+  $('lbl-vibration').textContent= t('vibration');
+  $('lbl-notifications').textContent = t('notif');
+  $('hdr-duration').textContent = t('duration');
+  $('ftr-duration').textContent = t('durationNote');
+  $('unit-min').textContent     = t('min');
+  $('unit-sec').textContent     = t('sec');
+  $('hdr-appearance').textContent = t('appearance');
+  $('lbl-lightmode').textContent= t('lightMode');
+  $('hdr-language').textContent = t('language');
+  $('lbl-language').textContent = t('language');
+  $('pause-label').textContent  = isPaused ? t('resume') : t('pause');
+  $('reset-label').textContent  = t('reset');
+  $('seg-ja').classList.toggle('active', cfg.language === 'ja');
+  $('seg-en').classList.toggle('active', cfg.language === 'en');
+}
+
+function setLang(lang) {
+  cfg.language = lang;
+  ls('language', lang);
+  applyLang();
+  updateAppIcon();   // manifest 内の name / short_name も言語に追従させる
+}
+
+// ─── HELPERS ─────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+
+function ls(key, val) {
+  if (val === undefined) return localStorage.getItem(key);
+  localStorage.setItem(key, val);
+}
+
+function fmt(secs) {
+  return String(Math.floor(secs / 60)).padStart(2,'0') + ':' + String(secs % 60).padStart(2,'0');
+}
+
+function setDisplay(secs) {
+  $('timer-display').textContent = fmt(secs);
+}
+
+// ─── SETTINGS PERSISTENCE ────────────────────────────────
+function loadCfg() {
+  const raw = ls('totalSeconds');
+  if (raw) cfg.totalSeconds = parseInt(raw, 10);
+  ['soundEnabled','vibrationEnabled','notificationEnabled','lightMode'].forEach(k => {
+    const v = ls(k);
+    if (v !== null) cfg[k] = v === 'true';
+  });
+  const lang = ls('language');
+  if (lang) cfg.language = lang;
+}
+
+function saveSetting(key, val) {
+  cfg[key] = val;
+  ls(key, val);
+}
+
+function syncToggles() {
+  $('tog-sound').checked         = cfg.soundEnabled;
+  $('tog-vibration').checked     = cfg.vibrationEnabled;
+  $('tog-notifications').checked = cfg.notificationEnabled;
+  $('tog-light').checked         = cfg.lightMode;
+}
+
+// ═════════════════════════════════════════════════════════
+//  DYNAMIC APP ICON
+//  「最後に設定した分数」を Canvas で描画し、PNG の data URL にして
+//  <link rel="apple-touch-icon"> と Web App Manifest に差し込む。
+//
+//  ★ 重要な仕様上の制約:
+//    ホーム画面のアイコンは「追加した瞬間」に確定する。
+//    追加後にアプリ内で分数を変えても、既存のアイコンは変わらない。
+//    → 新しい分数のアイコンにしたい場合は、追加し直す必要がある。
+// ═════════════════════════════════════════════════════════
+
+let manifestBlobUrl = null;
+
+/**
+ * @param {number} size    正方形アイコンの一辺 (px)
+ * @param {number} minutes 表示する分数
+ * @returns {string} data:image/png;base64,... 形式の URL
+ */
+function drawIconDataURL(size, minutes) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const g = c.getContext('2d');
+
+  // 背景は端まで塗る (full-bleed)。
+  // iOS は角丸マスクを、Android は maskable マスクを自動で被せるので、
+  // こちら側で角丸や影を付けてはいけない(二重になる)。
+  g.fillStyle = '#000000';
+  g.fillRect(0, 0, size, size);
+
+  const cx = size / 2, cy = size / 2;
+
+  // 分数の数字だけを中央に描く。
+  // maskable icon の safe zone は「中心 80% の円内」なので、
+  // 文字がその中に収まるサイズにしておくと端が切れない。
+  const txt = String(minutes);
+  const ratio = txt.length >= 2 ? 0.44 : 0.52;
+  g.fillStyle = '#ffffff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = Math.round(size * ratio) + 'px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  g.fillText(txt, cx, cy);
+
+  return c.toDataURL('image/png');
+}
+
+/** manifest を動的に生成し、<link rel="manifest"> を差し替える (主に Android/Chrome 用) */
+function updateManifest(icons) {
+  try {
+    const base = new URL('./', location.href).href;
+    const bg = cfg.lightMode ? '#ffffff' : '#000000';
+    const manifest = {
+      name: t('title'),
+      short_name: t('short'),
+      start_url: base,          // blob: URL が基準になるため絶対 URL にする
+      scope: base,
+      display: 'standalone',
+      orientation: 'any',
+      background_color: bg,
+      theme_color: bg,
+      icons: [
+        { src: icons[192], sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: icons[512], sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: icons[512], sizes: '512x512', type: 'image/png', purpose: 'maskable' }
+      ]
+    };
+    const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+    const url = URL.createObjectURL(blob);
+    $('manifest-link').setAttribute('href', url);
+    if (manifestBlobUrl) URL.revokeObjectURL(manifestBlobUrl);
+    manifestBlobUrl = url;
+  } catch (e) {
+    // 失敗しても静的 manifest.webmanifest が残るので、インストール自体は可能
+    console.warn('dynamic manifest failed:', e);
+  }
+}
+
+/** 現在の設定分数でアイコン(apple-touch-icon / favicon / manifest)を更新 */
+function updateAppIcon() {
+  const minutes = Math.floor(cfg.totalSeconds / 60);
+  const icons = {
+    180: drawIconDataURL(180, minutes),
+    192: drawIconDataURL(192, minutes),
+    512: drawIconDataURL(512, minutes)
+  };
+
+  // 既存の apple-touch-icon / icon を除去してから貼り直す
+  document.querySelectorAll('link[rel="apple-touch-icon"], link[rel="icon"]')
+          .forEach(el => el.remove());
+
+  const touch = document.createElement('link');
+  touch.rel = 'apple-touch-icon';
+  touch.setAttribute('sizes', '180x180');
+  touch.href = icons[180];
+  document.head.appendChild(touch);
+
+  const fav = document.createElement('link');
+  fav.rel = 'icon';
+  fav.type = 'image/png';
+  fav.href = icons[192];
+  document.head.appendChild(fav);
+
+  updateManifest(icons);
+}
+
+// ─── THEME ───────────────────────────────────────────────
+function applyTheme(light) {
+  document.documentElement.setAttribute('data-theme', light ? 'light' : '');
+  $('meta-theme-color').setAttribute('content', light ? '#ffffff' : '#000000');
+}
+
+function onThemeChange(light) {
+  saveSetting('lightMode', light);
+  applyTheme(light);
+  updateAppIcon();   // manifest の背景色も追従させる
+}
+
+// ─── WAKE LOCK ───────────────────────────────────────────
+async function acquireWake() {
+  if (!('wakeLock' in navigator)) return;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch(_){}
+}
+
+async function releaseWake() {
+  if (!wakeLock) return;
+  try { await wakeLock.release(); } catch(_){}
+  wakeLock = null;
+}
+
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  if (!isFinished && !isPaused) {
+    acquireWake();
+    if (endTime) {
+      const rem = Math.round((endTime - Date.now()) / 1000);
+      if (rem <= 0) { remaining = 0; setDisplay(0); if (!isFinished) handleFinished(); }
+      else { remaining = rem; setDisplay(remaining); }
+    }
+  }
+});
+
+// ─── AUDIO (Web Audio API beep) ──────────────────────────
+function getCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function beep() {
+  if (!alarmLoop) return;
+  const ctx = getCtx();
+  ctx.resume().then(() => {
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1047, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.25);
+    gain.gain.setValueAtTime(0.45, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.6);
+  });
+  alarmTid = setTimeout(beep, 1000);
+}
+
+function playAlarm()  { alarmLoop = true;  beep(); }
+function stopAlarm()  {
+  alarmLoop = false;
+  if (alarmTid) { clearTimeout(alarmTid); alarmTid = null; }
+}
+
+// ─── NOTIFICATIONS ───────────────────────────────────────
+function scheduleNotif() {
+  cancelNotif();
+  if (!cfg.notificationEnabled || remaining <= 0) return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  notifTid = setTimeout(() => {
+    try { new Notification(t('nTitle'), { body: t('nBody') }); } catch(_){}
+  }, remaining * 1000);
+}
+
+function cancelNotif() {
+  if (notifTid) { clearTimeout(notifTid); notifTid = null; }
+}
+
+function onNotifToggle(checked) {
+  saveSetting('notificationEnabled', checked);
+  if (!checked) return;
+  if (typeof Notification === 'undefined') {
+    $('tog-notifications').checked = false;
+    saveSetting('notificationEnabled', false);
+    return;
+  }
+  if (Notification.permission === 'granted') return;
+  Notification.requestPermission().then(perm => {
+    if (perm !== 'granted') {
+      $('tog-notifications').checked = false;
+      saveSetting('notificationEnabled', false);
+    }
+  });
+}
+
+// ─── TIMER LOGIC ─────────────────────────────────────────
+function tick() {
+  if (!endTime) return;
+  const rem = Math.round((endTime - Date.now()) / 1000);
+  if (rem <= 0) {
+    remaining = 0;
+    setDisplay(0);
+    handleFinished();
+  } else {
+    remaining = rem;
+    setDisplay(remaining);
+  }
+}
+
+function startCountdown() {
+  endTime = Date.now() + remaining * 1000;
+  mainInterv = setInterval(tick, 500);
+}
+
+function stopCountdown() {
+  clearInterval(mainInterv);
+  mainInterv = null;
+  endTime = null;
+}
+
+function stopBlink() {
+  clearInterval(blinkInterv);
+  blinkInterv = null;
+  $('timer-display').classList.remove('blink-hidden');
+  blinkOn = true;
+}
+
+function handleFinished() {
+  stopCountdown();
+  cancelNotif();
+  isFinished = true;
+
+  if (cfg.vibrationEnabled && navigator.vibrate) {
+    navigator.vibrate([200, 100, 200, 100, 500]);
+  }
+  if (cfg.soundEnabled) playAlarm();
+
+  blinkInterv = setInterval(() => {
+    blinkOn = !blinkOn;
+    $('timer-display').classList.toggle('blink-hidden', !blinkOn);
+  }, 500);
+
+  $('pause-btn').disabled = true;
+  releaseWake();
+}
+
+function startTimer() {
+  isFinished = false;
+  isPaused   = false;
+  stopBlink();
+  stopAlarm();
+  setDisplay(remaining);
+  renderPauseBtn();
+  $('pause-btn').disabled = false;
+  scheduleNotif();
+  startCountdown();
+  acquireWake();
+}
+
+function togglePause() {
+  if (isFinished) return;
+  if (isPaused) {
+    isPaused = false;
+    renderPauseBtn();
+    scheduleNotif();
+    startCountdown();
+    acquireWake();
+  } else {
+    stopCountdown();
+    isPaused = true;
+    renderPauseBtn();
+    cancelNotif();
+    releaseWake();
+  }
+}
+
+function resetTimer() {
+  stopCountdown();
+  stopBlink();
+  stopAlarm();
+  cancelNotif();
+  isFinished = false;
+  isPaused   = false;
+  remaining  = cfg.totalSeconds;
+  setDisplay(remaining);
+  renderPauseBtn();
+  $('pause-btn').disabled = false;
+  startTimer();
+}
+
+function renderPauseBtn() {
+  $('pause-label').textContent = isPaused ? t('resume') : t('pause');
+  $('icon-pause').style.display = isPaused ? 'none' : '';
+  $('icon-play').style.display  = isPaused ? '' : 'none';
+}
+
+// ─── DRUM-ROLL PICKER ────────────────────────────────────
+const ITEM_H = 44;
+
+function buildPicker(id, count, fmt) {
+  const el = $(id);
+  const top = document.createElement('div');
+  top.className = 'picker-pad';
+  el.appendChild(top);
+  for (let i = 0; i < count; i++) {
+    const item = document.createElement('div');
+    item.className = 'picker-item';
+    item.textContent = fmt ? fmt(i) : String(i);
+    el.appendChild(item);
+  }
+  const bot = document.createElement('div');
+  bot.className = 'picker-pad';
+  el.appendChild(bot);
+}
+
+function pickerScrollTo(id, index) {
+  const el = $(id);
+  el.scrollTop = index * ITEM_H;
+}
+
+function pickerValue(id) {
+  return Math.round($(id).scrollTop / ITEM_H);
+}
+
+// ─── SETTINGS SHEET ──────────────────────────────────────
+function openSettings() {
+  stopCountdown();
+  cancelNotif();
+
+  syncToggles();
+  setTimeout(() => {
+    pickerScrollTo('pick-min', Math.floor(cfg.totalSeconds / 60));
+    pickerScrollTo('pick-sec', cfg.totalSeconds % 60);
+  }, 80);
+
+  $('backdrop').classList.add('visible');
+  $('sheet').classList.add('open');
+}
+
+function closeSettings() {
+  $('backdrop').classList.remove('visible');
+  $('sheet').classList.remove('open');
+  remaining = cfg.totalSeconds;
+  resetTimer();
+}
+
+function doneSettings() {
+  const mins = pickerValue('pick-min');
+  const secs = pickerValue('pick-sec');
+  const total = mins * 60 + secs;
+  if (total > 0) {
+    cfg.totalSeconds = total;
+    ls('totalSeconds', total);
+    updateAppIcon();   // ★ 設定した分数をアイコンに反映
+  }
+  closeSettings();
+}
+
+// ─── SERVICE WORKER (offline) ────────────────────────────
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  // GitHub Pages のプロジェクトページ (https://user.github.io/repo/) でも
+  // 動くように、必ず相対パス './sw.js' で登録する。
+  // scope は sw.js の置き場所 (= /repo/) が自動的に採用される。
+  navigator.serviceWorker.register('./sw.js').catch(err => {
+    console.warn('Service Worker registration failed:', err);
+  });
+}
+
+// ─── INIT ────────────────────────────────────────────────
+function init() {
+  loadCfg();
+  applyTheme(cfg.lightMode);
+  syncToggles();
+  applyLang();
+  updateAppIcon();   // ★ 起動時点で「保存されている分数」のアイコンを用意
+
+  buildPicker('pick-min', 100, null);
+  buildPicker('pick-sec', 60, i => String(i).padStart(2, '0'));
+
+  remaining = cfg.totalSeconds;
+  setDisplay(remaining);
+  startTimer();
+
+  registerSW();
+}
+
+init();
+</script>
+</body>
+</html>
