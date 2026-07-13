@@ -6,7 +6,7 @@
 
 // ★ ファイルを更新したら必ずこの数字を上げること。
 //   キャッシュ名が変わる → install が走り直す → 新しい内容が配信される。
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE_NAME = 'sokucount-' + VERSION;
 
 // アプリの動作に必要な最小限のファイル(app shell)
@@ -19,6 +19,13 @@ const PRECACHE_URLS = [
   './icon-512.png',
 ];
 
+// 無くてもアプリは動くファイル。
+// これを PRECACHE_URLS に入れると、ファイルが 1 つでも欠けた瞬間に
+// cache.addAll() 全体が失敗し、オフライン機能ごと死ぬ。分けておく。
+const OPTIONAL_URLS = [
+  './alarm.mp3',
+];
+
 // ─── install: 初回インストール時に app shell を全部取得して保存 ───
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -26,6 +33,10 @@ self.addEventListener('install', (event) => {
     // cache.addAll は 1 つでも失敗すると全体が失敗する(=中途半端な
     // キャッシュを作らない)ので、app shell の取得にはこれが適している。
     await cache.addAll(PRECACHE_URLS);
+
+    // 任意ファイルは allSettled で「失敗しても先へ進む」
+    await Promise.allSettled(OPTIONAL_URLS.map(u => cache.add(u)));
+
     await self.skipWaiting(); // 古い SW の終了を待たずに新しい SW を有効化
   })());
 });

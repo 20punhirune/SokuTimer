@@ -485,20 +485,6 @@ html, body {
             <div class="toggle-track"><div class="toggle-knob"></div></div>
           </label>
         </div>
-        <div class="row">
-          <span class="row-label" id="lbl-vibration"></span>
-          <label class="toggle">
-            <input type="checkbox" id="tog-vibration" onchange="saveSetting('vibrationEnabled', this.checked)">
-            <div class="toggle-track"><div class="toggle-knob"></div></div>
-          </label>
-        </div>
-        <div class="row">
-          <span class="row-label" id="lbl-notifications"></span>
-          <label class="toggle">
-            <input type="checkbox" id="tog-notifications" onchange="onNotifToggle(this.checked)">
-            <div class="toggle-track"><div class="toggle-knob"></div></div>
-          </label>
-        </div>
       </div>
     </div>
 
@@ -550,11 +536,13 @@ html, body {
 const cfg = {
   totalSeconds: 903,
   soundEnabled: false,
-  vibrationEnabled: false,
-  notificationEnabled: false,
   lightMode: false,
   language: 'ja'
 };
+
+// ★ アラーム音のファイル。リポジトリ直下に置くこと。
+//    iOS Safari が確実に再生できる形式: .mp3 / .m4a(AAC) / .wav
+const ALARM_URL = './alarm.mp3';
 
 let remaining = 903;
 let isFinished = false;
@@ -564,10 +552,13 @@ let mainInterv = null;
 let blinkInterv= null;
 let blinkOn    = true;
 let wakeLock   = null;
-let alarmLoop  = false;
-let alarmTid   = null;
-let notifTid   = null;
-let audioCtx   = null;
+
+let audioCtx      = null;
+let alarmBuffer   = null;   // decode 済みの音声データ(使い回す)
+let alarmSource   = null;   // 再生中の AudioBufferSourceNode
+let alarmLoop     = false;
+let beepTid       = null;   // フォールバックのビープ用
+let audioUnlocked = false;
 
 // ─── I18N ────────────────────────────────────────────────
 const strings = {
@@ -578,8 +569,6 @@ const strings = {
     done:       '完了',
     alerts:     'アラート',
     sound:      'サウンド',
-    vibration:  '振動',
-    notif:      '通知',
     duration:   'タイマー時間',
     durationNote: 'ホーム画面アイコンの数字は、アイコンを追加した時点の分数で固定されます。分数を変更したあとにアイコンの数字も更新したい場合は、ホーム画面にアイコンを追加し直してください。',
     min:        '分',
@@ -589,9 +578,7 @@ const strings = {
     language:   '言語',
     pause:      '一時停止',
     resume:     '再開',
-    reset:      'リセット',
-    nTitle:     'タイマー終了',
-    nBody:      '設定した時間が経過しました。'
+    reset:      'リセット'
   },
   en: {
     title:      'Instant Timer',
@@ -600,8 +587,6 @@ const strings = {
     done:       'Done',
     alerts:     'Alerts',
     sound:      'Sound',
-    vibration:  'Vibration',
-    notif:      'Notifications',
     duration:   'Timer Duration',
     durationNote: 'The number on the Home Screen icon is fixed at the moment the icon is added. After changing the duration, re-add the app to your Home Screen to update the icon.',
     min:        'min.',
@@ -611,9 +596,7 @@ const strings = {
     language:   'Language',
     pause:      'Pause',
     resume:     'Resume',
-    reset:      'Reset',
-    nTitle:     'Timer Finished',
-    nBody:      'Your timer has finished.'
+    reset:      'Reset'
   }
 };
 
@@ -626,8 +609,6 @@ function applyLang() {
   $('done-btn').textContent     = t('done');
   $('hdr-alerts').textContent   = t('alerts');
   $('lbl-sound').textContent    = t('sound');
-  $('lbl-vibration').textContent= t('vibration');
-  $('lbl-notifications').textContent = t('notif');
   $('hdr-duration').textContent = t('duration');
   $('ftr-duration').textContent = t('durationNote');
   $('unit-min').textContent     = t('min');
@@ -669,7 +650,7 @@ function setDisplay(secs) {
 function loadCfg() {
   const raw = ls('totalSeconds');
   if (raw) cfg.totalSeconds = parseInt(raw, 10);
-  ['soundEnabled','vibrationEnabled','notificationEnabled','lightMode'].forEach(k => {
+  ['soundEnabled','lightMode'].forEach(k => {
     const v = ls(k);
     if (v !== null) cfg[k] = v === 'true';
   });
@@ -683,10 +664,8 @@ function saveSetting(key, val) {
 }
 
 function syncToggles() {
-  $('tog-sound').checked         = cfg.soundEnabled;
-  $('tog-vibration').checked     = cfg.vibrationEnabled;
-  $('tog-notifications').checked = cfg.notificationEnabled;
-  $('tog-light').checked         = cfg.lightMode;
+  $('tog-sound').checked = cfg.soundEnabled;
+  $('tog-light').checked = cfg.lightMode;
 }
 
 // ═════════════════════════════════════════════════════════
@@ -703,11 +682,23 @@ function syncToggles() {
 let manifestBlobUrl = null;
 
 /**
- * @param {number} size    正方形アイコンの一辺 (px)
- * @param {number} minutes 表示する分数
+ * アイコンに描く文字列を決める。
+ *   分 >= 1  → 分数        (例: 903 秒 → "15")
+ *   分 == 0  → 秒数        (例:  45 秒 → "45")
+ * ※ 数字だけなので "15分" と "15秒" は見た目で区別できない。
+ *   区別したい場合は下の return に単位を足す (例: `${s}"`)。
+ */
+function iconLabel() {
+  const m = Math.floor(cfg.totalSeconds / 60);
+  return m > 0 ? String(m) : String(cfg.totalSeconds % 60);
+}
+
+/**
+ * @param {number} size  正方形アイコンの一辺 (px)
+ * @param {string} txt   表示する文字列 (iconLabel() の戻り値)
  * @returns {string} data:image/png;base64,... 形式の URL
  */
-function drawIconDataURL(size, minutes) {
+function drawIconDataURL(size, txt) {
   const c = document.createElement('canvas');
   c.width = c.height = size;
   const g = c.getContext('2d');
@@ -720,10 +711,9 @@ function drawIconDataURL(size, minutes) {
 
   const cx = size / 2, cy = size / 2;
 
-  // 分数の数字だけを中央に描く。
+  // 数字だけを中央に描く。
   // maskable icon の safe zone は「中心 80% の円内」なので、
   // 文字がその中に収まるサイズにしておくと端が切れない。
-  const txt = String(minutes);
   const ratio = txt.length >= 2 ? 0.44 : 0.52;
   g.fillStyle = '#ffffff';
   g.textAlign = 'center';
@@ -737,7 +727,10 @@ function drawIconDataURL(size, minutes) {
 /** manifest を動的に生成し、<link rel="manifest"> を差し替える (主に Android/Chrome 用) */
 function updateManifest(icons) {
   try {
-    const base = new URL('./', location.href).href;
+    // location.href ではなく document.baseURI を使う。
+    // srcdoc iframe 内では location.href が "about:srcdoc" になり、
+    // 相対 URL の base として使えず TypeError になるため。
+    const base = new URL('./', document.baseURI).href;
     const bg = cfg.lightMode ? '#ffffff' : '#000000';
     const manifest = {
       name: t('title'),
@@ -767,11 +760,11 @@ function updateManifest(icons) {
 
 /** 現在の設定分数でアイコン(apple-touch-icon / favicon / manifest)を更新 */
 function updateAppIcon() {
-  const minutes = Math.floor(cfg.totalSeconds / 60);
+  const label = iconLabel();
   const icons = {
-    180: drawIconDataURL(180, minutes),
-    192: drawIconDataURL(192, minutes),
-    512: drawIconDataURL(512, minutes)
+    180: drawIconDataURL(180, label),
+    192: drawIconDataURL(192, label),
+    512: drawIconDataURL(512, label)
   };
 
   // 既存の apple-touch-icon / icon を除去してから貼り直す
@@ -829,66 +822,99 @@ document.addEventListener('visibilitychange', async () => {
   }
 });
 
-// ─── AUDIO (Web Audio API beep) ──────────────────────────
+// ═════════════════════════════════════════════════════════
+//  AUDIO — 外部音声ファイルを Web Audio API で再生
+//
+//  なぜ <audio> タグではなく Web Audio API か:
+//    - ギャップのないループ再生ができる (loop = true)
+//    - 停止・再生の制御が確実 (iOS の <audio> は挙動が不安定なことがある)
+//    - デコード済みバッファを使い回すので、鳴り出しの遅延がない
+//
+//  iOS の制約:
+//    ユーザー操作(タップ)を起点にしないと AudioContext が動かない
+//    (autoplay policy)。タイマー終了は「操作の直後」ではないため、
+//    最初のタップ時に unlockAudio() で先に解錠しておく必要がある。
+// ═════════════════════════════════════════════════════════
+
 function getCtx() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
 
+/** 音声ファイルを取得して decode。結果はキャッシュして使い回す。 */
+async function loadAlarm() {
+  if (alarmBuffer) return alarmBuffer;
+  const res = await fetch(ALARM_URL);           // Service Worker がキャッシュ済みならオフラインでも取れる
+  if (!res.ok) throw new Error('alarm fetch failed: ' + res.status);
+  const raw = await res.arrayBuffer();
+  alarmBuffer = await getCtx().decodeAudioData(raw);
+  return alarmBuffer;
+}
+
+/**
+ * 最初のユーザー操作で AudioContext を解錠し、音声を先読みしておく。
+ * 無音バッファを 1 回鳴らすのが定石(iOS はこれで "unlocked" と判定する)。
+ */
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  const ctx = getCtx();
+  ctx.resume().catch(() => {});
+  const s = ctx.createBufferSource();
+  s.buffer = ctx.createBuffer(1, 1, 22050);   // 1 サンプルの無音
+  s.connect(ctx.destination);
+  s.start(0);
+  loadAlarm().catch(err => console.warn('alarm preload failed:', err));
+}
+['pointerdown', 'touchend', 'click'].forEach(ev =>
+  document.addEventListener(ev, unlockAudio, { once: true, passive: true })
+);
+
+/** 音声ファイルが使えない場合のフォールバック(旧オシレーター音) */
 function beep() {
   if (!alarmLoop) return;
   const ctx = getCtx();
-  ctx.resume().then(() => {
-    const osc  = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(1047, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.25);
-    gain.gain.setValueAtTime(0.45, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.6);
-  });
-  alarmTid = setTimeout(beep, 1000);
+  const osc  = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(1047, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.25);
+  gain.gain.setValueAtTime(0.45, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.55);
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + 0.6);
+  beepTid = setTimeout(beep, 1000);
 }
 
-function playAlarm()  { alarmLoop = true;  beep(); }
-function stopAlarm()  {
-  alarmLoop = false;
-  if (alarmTid) { clearTimeout(alarmTid); alarmTid = null; }
-}
-
-// ─── NOTIFICATIONS ───────────────────────────────────────
-function scheduleNotif() {
-  cancelNotif();
-  if (!cfg.notificationEnabled || remaining <= 0) return;
-  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-  notifTid = setTimeout(() => {
-    try { new Notification(t('nTitle'), { body: t('nBody') }); } catch(_){}
-  }, remaining * 1000);
-}
-
-function cancelNotif() {
-  if (notifTid) { clearTimeout(notifTid); notifTid = null; }
-}
-
-function onNotifToggle(checked) {
-  saveSetting('notificationEnabled', checked);
-  if (!checked) return;
-  if (typeof Notification === 'undefined') {
-    $('tog-notifications').checked = false;
-    saveSetting('notificationEnabled', false);
-    return;
+async function playAlarm() {
+  alarmLoop = true;
+  try {
+    const ctx = getCtx();
+    await ctx.resume();
+    const buf = await loadAlarm();
+    if (!alarmLoop) return;                    // 待っている間に stop されたら鳴らさない
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;                           // 停止操作があるまで鳴り続ける
+    src.connect(ctx.destination);
+    src.start(0);
+    alarmSource = src;
+  } catch (err) {
+    console.warn('alarm file playback failed, falling back to beep:', err);
+    beep();
   }
-  if (Notification.permission === 'granted') return;
-  Notification.requestPermission().then(perm => {
-    if (perm !== 'granted') {
-      $('tog-notifications').checked = false;
-      saveSetting('notificationEnabled', false);
-    }
-  });
+}
+
+function stopAlarm() {
+  alarmLoop = false;
+  if (alarmSource) {
+    try { alarmSource.stop(); } catch(_) {}
+    alarmSource.disconnect();
+    alarmSource = null;
+  }
+  if (beepTid) { clearTimeout(beepTid); beepTid = null; }
 }
 
 // ─── TIMER LOGIC ─────────────────────────────────────────
@@ -925,12 +951,8 @@ function stopBlink() {
 
 function handleFinished() {
   stopCountdown();
-  cancelNotif();
   isFinished = true;
 
-  if (cfg.vibrationEnabled && navigator.vibrate) {
-    navigator.vibrate([200, 100, 200, 100, 500]);
-  }
   if (cfg.soundEnabled) playAlarm();
 
   blinkInterv = setInterval(() => {
@@ -950,7 +972,6 @@ function startTimer() {
   setDisplay(remaining);
   renderPauseBtn();
   $('pause-btn').disabled = false;
-  scheduleNotif();
   startCountdown();
   acquireWake();
 }
@@ -960,14 +981,12 @@ function togglePause() {
   if (isPaused) {
     isPaused = false;
     renderPauseBtn();
-    scheduleNotif();
     startCountdown();
     acquireWake();
   } else {
     stopCountdown();
     isPaused = true;
     renderPauseBtn();
-    cancelNotif();
     releaseWake();
   }
 }
@@ -976,7 +995,6 @@ function resetTimer() {
   stopCountdown();
   stopBlink();
   stopAlarm();
-  cancelNotif();
   isFinished = false;
   isPaused   = false;
   remaining  = cfg.totalSeconds;
@@ -1023,8 +1041,6 @@ function pickerValue(id) {
 // ─── SETTINGS SHEET ──────────────────────────────────────
 function openSettings() {
   stopCountdown();
-  cancelNotif();
-
   syncToggles();
   setTimeout(() => {
     pickerScrollTo('pick-min', Math.floor(cfg.totalSeconds / 60));
